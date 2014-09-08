@@ -43,7 +43,7 @@ def current_info_box():
             x = manage_string(current_info[i])
             new_c_i.append(x)
         for i in range(len(current_info)):
-            screen.addstr(i + 15, 35, new_c_i[i])
+            screen.addstr(i + 25, 35, new_c_i[i])
 
 def get_status():
      if port is not None:
@@ -66,6 +66,21 @@ def get_status():
      else:
           nc = "Not connected."
           return [nc,nc,nc,nc,nc,nc]
+
+def print_obs(name, alignra, aligndec):
+    with open(name, 'a') as f:
+        port.readline()
+        port.write('!CGra;') # GetRA
+        curra = port.readline()
+        port.write('!CGde;') # GetDec
+        curdec = port.readline()
+        port.write('!CGtr;') # GetTargetRA
+        tarra = port.readline()
+        port.write('!CGtd;') # GetTargetDec
+        tardec = port.readline()
+
+        f.write(alignra,aligndec,tarra,tardec,curra,curdec)
+        
 
 def manage_string(string):
     new_string = ''
@@ -118,11 +133,14 @@ help_list = ['o - Open Port', 'e - Set Alignment Side',
              'v - Void alignment',
              'b - Return to previous target',
              's - Open/close server commands',
+             'f - Change output filename',
+             'p - Print observation data',
          '------------','q - Exit']
 
 current_info_titles = ['Alignment State:', 'Side of the Sky:',
                        'Current Right Ascension:', 'Current Declination:',
-                       'Target Right Ascension:', 'Target Declination:']
+                       'Target Right Ascension:', 'Target Declination:',
+                       '']
 
 conn = None
 addr = None
@@ -130,7 +148,11 @@ server_running = False
 stell_align = False
 RA = None
 DEC = None
-
+alignRA = None
+alignDEC = None
+tarRA = None
+tarDEC = None
+filename = "observations.txt"
 screen = curses.initscr()
 screen.timeout(50) #stops getch() from blocking
 start_time = time.time()
@@ -144,7 +166,7 @@ while good:
     for i in range(len(help_list)):
         screen.addstr(i + 3, 4, help_list[i])
     for i in range(len(current_info_titles)):
-        screen.addstr(i + 15, 4, current_info_titles[i])
+        screen.addstr(i + 25, 4, current_info_titles[i])
     current_info_box()
     current_time = time.time()
     if port is not None:
@@ -170,8 +192,10 @@ while good:
                 stell_align = False
                 print "Aligning"
                 port.write('!CStd' + DEC + ';')
+                alignDEC = DEC
                 print port.readline()
                 port.write('!CStr' + RA + ';')
+                alignRA = RA
                 print port.readline()
                 port.write('!AFrn;')
                 print port.readline()
@@ -224,6 +248,8 @@ while good:
                 stell_align = True
             else:
                 port.write('!AFrn;')
+                alignRA = tarRA
+                alignDEC = tarDEC
 
     # Goto target
     if key == ord('g'):
@@ -251,6 +277,17 @@ while good:
             conn, addr = open_server()
             server_running = True
             print "Server open"
+    
+    # Change output filename
+    if key == ord('f'):
+        if port is not None:
+            filename = get_param("Output Filename")
+
+    # Print alignment RA, DEC, Target RA, DEC and Current RA, DEC to filename
+    if key == ord('p'):
+        if port is not None:
+            print_obs(filename, alignRA, alignDEC)
+            print "Printed"
 
     # Update information
     if key == ord('u'):
