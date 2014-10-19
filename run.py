@@ -29,6 +29,7 @@ def ra_raw2str(raw):
     ra = float(raw)/2147483648.0 *12.0
     return  "%02d:%02d:%02d" % (int(ra),  int(ra%1*60),  round(ra%1*60%1*60, 1)) 
 
+
 class Menu():                                                          
     def __init__(self):
         self.position = 0                                                    
@@ -47,91 +48,45 @@ class Menu():
             ('c','Execute custom command',          telescope.send_custom_command),
             ('q','Exit',                            telescope.exit)
             ]
-        
         self.window = curses.newwin(len(self.menuitems)+2,67,4,2)                                  
         self.window.keypad(1)                                                
         self.window.timeout(100)    # in ms
         
-    
-    def navigate(self, n):                                                   
-        self.position += n                                                   
-        if self.position < 0:                                                
-            self.position = 0                                                
-        elif self.position >= len(self.menuitems):                               
-            self.position = len(self.menuitems)-1                                
-
     def display(self):                                                       
-        while True:                                                          
-            self.window.border(0)
-            telescope.status.display()
-            for index, item in enumerate(self.menuitems):                        
-                if index == self.position:                                   
-                    mode = curses.A_REVERSE                                  
-                else:                                                        
-                    mode = curses.A_NORMAL                                   
+        self.window.border(0)
+        for index, item in enumerate(self.menuitems):                        
+            if index == self.position:                                   
+                mode = curses.A_REVERSE                                  
+            else:                                                        
+                mode = curses.A_NORMAL                                   
+            msg = ' %s - %s ' % (item[0],item[1])                            
+            self.window.addstr(1+index, 1, msg, mode)                    
 
-                msg = ' %s - %s ' % (item[0],item[1])                            
-                self.window.addstr(1+index, 1, msg, mode)                    
+        key = self.window.getch()                                        
 
-            key = self.window.getch()                                        
-
-            if key in [curses.KEY_ENTER, ord('\n')]:                         
-                self.menuitems[self.position][2]()                           
-            elif key == curses.KEY_UP:                                       
-                self.navigate(-1)                                            
-            elif key == curses.KEY_DOWN:                                     
-                self.navigate(1)                                             
-            else:
-                for (index,m) in enumerate(self.menuitems):
-                    if ord(m[0])==key:
-                        self.position=index
-                        m[2]()
-
-
-            if telescope.socket is not None:
-                if telescope.conn is None:
-                    try:
-                        telescope.conn, addr = telescope.socket.accept()
-                        telescope.push_message("Connection established from %s:%d."% addr)
-                    except socket.error as e:
-                        pass
-                else:
-                    try:
-                        data = telescope.conn.recv(1024)
-                        if len(data)==20:   # goto command
-                            data = struct.unpack('<hhQIi',data)
-                            ra_string, dec_string = ra_raw2str(data[-2]), dec_raw2str(data[-1])
-                            telescope.push_message("Received from stellarium: %s %s" % (ra_string,dec_string))
-                            telescope.send('!CStr' + ra_string + ';')
-                            telescope.send('!CStd' + dec_string + ';')
-                            if telescope.stellarium_mode==0: #align
-                                telescope.align_from_target()
-                            else: #goto
-                                telescope.go_to_target()
-                        elif len(data)==0:
-                            pass
-                        else:
-                            telescope.push_message("Unknown command received of length %d."%len(data))
-                    except socket.error as e:
-                        pass
+        if key in [curses.KEY_ENTER, ord('\n')]:                         
+            self.menuitems[self.position][2]()                           
+        elif key == curses.KEY_UP:                                       
+            self.position -= 1                                                   
+            if self.position < 0:                                                
+                self.position = 0                                                
+        elif key == curses.KEY_DOWN:                                     
+            self.position += 1                                                   
+            if self.position >= len(self.menuitems):                               
+                self.position = len(self.menuitems)-1                                
+        else:
+            for (index,m) in enumerate(self.menuitems):
+                if ord(m[0])==key:
+                    self.position=index
+                    m[2]()
 
 
 class Status():                                                          
     def __init__(self):
         ypos = 4+telescope.menu.window.getmaxyx()[0]
         self.window_status = curses.newwin(6,67,ypos,2)                                  
-        
-        self.telescope_states= [
-            ['Alignment state',              '!AGas;', ""],  
-            ['Side of the sky',              '!AGai;', ""],
-            ['Current right ascension',      '!CGra;', ""],
-            ['Current declination',          '!CGde;', ""],
-            ['Target right ascension',       '!CGtr;', ""],
-            ['Target declination',           '!CGtd;', ""]
-        ]
         ypos += self.window_status.getmaxyx()[0]
-        self.window_telescope = curses.newwin(3+len(self.telescope_states),67,ypos,2)                                  
-        
+        self.window_telescope = curses.newwin(3+len(telescope.telescope_states),67,ypos,2)                                  
         self.maxmessages = 6;
         self.messages = []
         self.push_message("PTCS initialized.")
@@ -172,7 +127,6 @@ class Status():
         else:
             stellarium_mode = "Go to next coordinates"
         self.window_status.addstr(4, 19, stellarium_mode )                    
-
         self.window_status.refresh()
         
         # Status Messages
@@ -183,34 +137,14 @@ class Status():
             self.window_messages.addstr(2+index, 4, message)                    
         self.window_messages.refresh()
         
-        
+        # Telescope readout
         self.window_telescope.clear()
         self.window_telescope.border(0)
-        
-        if time.time() - telescope.last_telescope_update > 2.: # only update the infos every 2 seconds
-            telescope.last_telescope_update = time.time()
-            self.get_telescope_status()
-            if telescope.socket is not None:
-                if telescope.conn is not None:
-                    telescope.send_coordinates_to_stellarium()
         self.window_telescope.addstr(1, 2, "Telescope readout", curses.A_BOLD)                    
-        for (index,element) in enumerate(self.telescope_states):
+        for (index,element) in enumerate(telescope.telescope_states):
             self.window_telescope.addstr(index+2, 4, element[0])                    
             self.window_telescope.addstr(index+2, 32, element[2])                    
-
         self.window_telescope.refresh()
-
-    def get_telescope_status(self):
-        if telescope.serialport is not None:
-            telescope.serialport.read(1024) # empty buffer
-            for (index,element) in enumerate(self.telescope_states):
-                telescope.serialport.write(element[1]) 
-                element[2] = telescope.serialport.read(1024).strip() 
-        else:
-            for (index,element) in enumerate(self.telescope_states):
-                element[2] = "N/A"
-            
-
 
 
 telescope = None    # Singleton
@@ -228,16 +162,80 @@ class Telescope():
         curses.curs_set(0)
         self.screen.addstr(1, 2, "UTSC | PTCS", curses.A_BOLD)
         self.screen.addstr(2, 2, "University of Toronto Scarborough | Python Telescope Control System", curses.A_BOLD)
-        #self.screen.border()
+        self.telescope_states= [
+            ['Alignment state',              '!AGas;', ""],  
+            ['Side of the sky',              '!AGai;', ""],
+            ['Current right ascension',      '!CGra;', ""],
+            ['Current declination',          '!CGde;', ""],
+            ['Target right ascension',       '!CGtr;', ""],
+            ['Target declination',           '!CGtd;', ""]
+        ]
         self.screen.refresh()
         self.screen.immedok(True)
-        main_menu_items = [                                                  
-                ('beep', curses.beep),                                       
-                ('flash', curses.flash),                                     
-                ]                                                            
         self.menu = Menu()                       
-        self.status = Status()                       
-        self.menu.display()
+        self.status = Status()    
+        ## Main loop
+        while True:
+            # Get telescope heartbeat
+            if time.time() - self.last_telescope_update > 2.: # only update the infos every 2 seconds
+                self.last_telescope_update = time.time()
+                if self.serialport is not None:
+                    self.serialport.read(1024) # empty buffer
+                    for (index,element) in enumerate(self.telescope_states):
+                        self.serialport.write(element[1]) 
+                        element[2] = self.serialport.read(1024).strip() 
+                        if element[2][0] == chr(0x8F):
+                            element[2] = "ATCL_ACK"
+                        if element[2][0] == chr(0xA5):
+                            element[2] = "ATCL_NACK"
+                        if element[2][-1] == ";":
+                            element[2] = element[2][:-1]
+                else:
+                    for (index,element) in enumerate(self.telescope_states):
+                        element[2] = "N/A"
+                # Send data to stellarium
+                if self.socket is not None:
+                    if self.conn is not None:
+                        try:
+                            for (desc, command, value) in self.telescope_states:
+                                if command == '!CGra;':
+                                    ra = ra_str2raw(value)
+                                if command == '!CGde;':
+                                    dec = dec_str2raw(value)
+                            data = struct.pack('<hhQIii',24,0,int(round(time.time() * 1000)), ra, dec, 0)
+                            telescope.conn.send(data)
+                        except:
+                            pass
+            # Poll socket for Stellarium
+            if self.socket is not None:
+                if self.conn is None:
+                    try:
+                        self.conn, addr = self.socket.accept()
+                        self.push_message("Connection established from %s:%d."% addr)
+                    except socket.error as e:
+                        pass
+                else:
+                    try:
+                        data = self.conn.recv(1024)
+                        if len(data)==20:   # goto command
+                            data = struct.unpack('<hhQIi',data)
+                            ra_string, dec_string = ra_raw2str(data[-2]), dec_raw2str(data[-1])
+                            self.push_message("Received from stellarium: %s %s" % (ra_string,dec_string))
+                            self.send('!CStr' + ra_string + ';')
+                            self.send('!CStd' + dec_string + ';')
+                            if self.stellarium_mode==0:
+                                self.align_from_target()
+                            else: 
+                                self.go_to_target()
+                        elif len(data)==0:
+                            pass
+                        else:
+                            self.push_message("Unknown command received of length %d."%len(data))
+                    except socket.error as e:
+                        pass
+            # Refresh display
+            self.menu.display()
+            self.status.display()
         
     def toggle_stellarium_mode(self):
         self.stellarium_mode = not self.stellarium_mode
@@ -256,18 +254,6 @@ class Telescope():
                 self.socket = None
         else:
             self.push_message("Server already running.")
-
-    def send_coordinates_to_stellarium(self): 
-        try:
-            for (desc, command, value) in self.status.telescope_states:
-                if command == '!CGra;':
-                    ra = ra_str2raw(value)
-                if command == '!CGde;':
-                    dec = dec_str2raw(value)
-            data = struct.pack('<hhQIii',24,0,int(round(time.time() * 1000)), ra, dec, 0)
-            telescope.conn.send(data)
-        except:
-            pass
     
     def push_message(self, message):
         self.status.push_message(message)
@@ -354,7 +340,7 @@ class Telescope():
     def write_telescope_readout(self):
         with open(self.logfilename, 'a') as f:
             f.write(time.strftime("%Y-%m-%d %H:%M:%S\t", time.gmtime()))                  
-            for (desc, command, value) in self.status.telescope_states:
+            for (desc, command, value) in self.telescope_states:
                 f.write(value+"\t")
             f.write(value+"\n")
             self.push_message("Telescope readout saved.")
