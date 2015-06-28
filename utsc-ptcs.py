@@ -18,12 +18,18 @@
 # along with UTSC | PCTS.  If not, see <http://www.gnu.org/licenses/>.
 #
 import serial
+#from PIL import ImageTk, Image
 import os
 import time
 import curses
 import socket
 import struct
 import time
+import sys
+import subprocess
+import signal
+#import Tkinter as tk
+
 
 ## Conversion functions
 def dec_str2raw(s):
@@ -54,18 +60,23 @@ class Menu():
         self.menuitems = [
             ('o','Open serial port for telescope',  telescope.open_port), 
             ('O','Open serial port for RoboFocus',  telescope.open_robofocus_port), 
-            ('m','Move RoboFocus',                  telescope.robofocus_userinput),
             ('e','Set alignment side',              telescope.set_alignment_side), 
-            ('r','Target right ascension',          telescope.set_target_rightascension), 
-            ('d','Target declination',              telescope.set_target_declination), 
-            ('a','Align from target',               telescope.align_from_target), 
-            ('g','Go to target',                    telescope.go_to_target), 
-            #('v','Void alignment',                 telescope.void_alignment),
-            ('b','Return to previous target',       telescope.previous_alignment),
+            #('a','Align from target',               telescope.align_from_target), 
+            # ('v','Void alignment',                  telescope.void_alignment),
             ('s','Start Stellarium server',         telescope.start_server),
             ('t','Toggle Stellarium mode',          telescope.toggle_stellarium_mode),
-            ('p','Write telescope readout to file', telescope.write_telescope_readout),
-            ('c','Execute custom telescope command',telescope.send_custom_command),
+            # ('p','Write telescope readout to file', telescope.write_telescope_readout),
+            #('b','Return to previous target',       telescope.previous_alignment),
+            ('g','Go to target',                    telescope.go_to_target), 
+            ('m','Move RoboFocus',                  telescope.robofocus_userinput),
+            #('R','Target right ascension',          telescope.set_target_rightascension), 
+            #('d','Target declination',              telescope.set_target_declination), 
+            #('C','Execute custom telescope command',telescope.send_custom_command),
+            ('r','Read camera settings',            telescope.read_camera),
+            ('I','Set camera ISO',                  telescope.define_iso),
+            ('S','Set camera shutter speed',        telescope.shutter_speed),
+            ('N','Set camera number of pictures',   telescope.numberofpictures),
+            ('c','Capture images',                  telescope.capture_images),
             ('q','Exit',                            telescope.exit)
             ]
         self.window = curses.newwin(len(self.menuitems)+2,67,4,2)                                  
@@ -104,7 +115,7 @@ class Menu():
 class Status():                                                          
     def __init__(self):
         ypos = 4+telescope.menu.window.getmaxyx()[0]
-        self.window_status = curses.newwin(7,67,ypos,2)                                  
+        self.window_status = curses.newwin(8,67,ypos,2)                                  
         ypos += self.window_status.getmaxyx()[0]
         self.window_telescope = curses.newwin(3+len(telescope.telescope_states),67,ypos,2)                                  
         self.maxmessages = 16;
@@ -114,11 +125,13 @@ class Status():
         self.window_messages = curses.newwin(3+self.maxmessages,67,ypos,2)                                  
 
     def push_message(self,message):
-        if len(message)>0:
-            timestamp = time.strftime("%H:%M:%S", time.gmtime())                    
-            self.messages.insert(0,"%s %s" %(timestamp,message))
-            if len(self.messages)>self.maxmessages:
-                self.messages.pop()
+        if isinstance(message, str):
+            message = message.strip()
+            if len(message)>0:
+                timestamp = time.strftime("%H:%M:%S", time.gmtime())                    
+                self.messages.insert(0,"%s %s" %(timestamp,message))
+                if len(self.messages)>self.maxmessages:
+                    self.messages.pop()
         
     def display(self):                                                       
         self.window_status.clear()
@@ -153,6 +166,9 @@ class Status():
         else:
             stellarium_mode = "Go to next coordinates"
         self.window_status.addstr(5, 19, stellarium_mode )                    
+        
+        self.window_status.addstr(6, 2, "Camera")                    
+        self.window_status.addstr(6, 19, telescope.camera)                    
         self.window_status.refresh()
         
         # Status Messages
@@ -174,14 +190,32 @@ class Status():
         for (index,element) in enumerate(telescope.robofocus_states):
             self.window_telescope.addstr(index+2, 2+46, element[0])                    
             self.window_telescope.addstr(index+2, 2+46+10, element[2])                    
+        
+        self.window_telescope.addstr(4, 48, "Camera settings", curses.A_BOLD)                    
+        self.window_telescope.addstr(5, 48, "ISO       %s"% telescope.camera_iso)                    
+        if "bulb" not in telescope.camera_shutter:
+            if "N/A" not in telescope.camera_shutter and "bulb":
+                self.window_telescope.addstr(6, 48, "Shutter   %ss"% telescope.camera_shutter)                    
+            else:
+                self.window_telescope.addstr(6, 48, "Shutter   %s"% telescope.camera_shutter)                    
+        else:
+            self.window_telescope.addstr(6, 48, "Shutter   %ds (b)"% telescope.camera_longexpshutter)                    
+        self.window_telescope.addstr(7, 48, "Num       %d/%d"% (telescope.camera_numtaken,telescope.camera_num))                   
         self.window_telescope.refresh()
-
 
 telescope = None    # Singleton
 class Telescope():
     def __init__(self, stdscreen):
         global telescope
         telescope = self
+        self.camera         = "Never read"
+        self.camera_iso     = "N/A"
+        self.camera_shutter = "N/A"
+        self.camera_longexpshutter = 5
+        self.camera_num = 1
+        self.camera_status = 0
+        self.camera_numtaken = 0
+        self.camera_path = None
         self.last_telescope_update = 0
         self.last_robofocus_update = 0
         self.conn = None
@@ -216,24 +250,30 @@ class Telescope():
             if time.time() - self.last_telescope_update > 2.: # only update the infos every 2 seconds
                 self.last_telescope_update = time.time()
                 if self.serialport is not None:
-                    self.serialport.read(1024) # empty buffer
-                    for (index,element) in enumerate(self.telescope_states):
-                        self.serialport.write(element[1]) 
-                        time.sleep(0.05)
-                        ret = self.serialport.read(1024).strip() 
-                        atcl_asynch = ret.split(chr(0x9F))
-                        if len(atcl_asynch)>1:
-                            ret = atcl_asynch[0]
-                        if len(ret)>0:
-                            if ret[0] == chr(0x8F):
-                                ret = "ATCL_ACK"
-                            if ret[0] == chr(0xA5):
-                                ret = "ATCL_NACK"
-                            if ret[-1] == ";":
-                                ret = ret[:-1]
-                        else:
-                            ret = "N/A"
-                        element[2] = ret
+                    try:
+                        self.serialport.read(1024) # empty buffer
+                        for (index,element) in enumerate(self.telescope_states):
+                            self.serialport.write(element[1]) 
+                            time.sleep(0.05)
+                            ret = self.serialport.read(1024).strip() 
+                            atcl_asynch = ret.split(chr(0x9F))
+                            if len(atcl_asynch)>1:
+                                ret = atcl_asynch[0]
+                            if len(ret)>0:
+                                if ret[0] == chr(0x8F):
+                                    ret = "ATCL_ACK"
+                                if ret[0] == chr(0xA5):
+                                    ret = "ATCL_NACK"
+                                if ret[-1] == ";":
+                                    ret = ret[:-1]
+                            else:
+                                ret = "N/A"
+                            element[2] = ret
+                    except:
+                        if self.serialport is not None:
+                            if self.serialport.isOpen():
+                                self.serialport.close()
+                        self.push_message("Something is wrong. Closing serial connection to telescope.")
                 else:
                     for (index,element) in enumerate(self.telescope_states):
                         element[2] = "N/A"
@@ -291,6 +331,7 @@ class Telescope():
             # Refresh display
             self.menu.display()
             self.status.display()
+            self.camera_check()
     
     def push_message(self, message):
         self.status.push_message(message)
@@ -331,7 +372,7 @@ class Telescope():
         if os.uname()[0]=="Darwin":
             default_port_name = '/dev/tty.usbserial'
         else:
-            default_port_name = '/dev/ttyUSB0'
+            default_port_name = '/dev/ttyS0'
         port_name = self.get_param("Telescope serial port [leave blank for '"+default_port_name+"']")
         try:
             if port_name == '':
@@ -372,6 +413,123 @@ class Telescope():
             self.send('!CStr' + ra + ';')
         else:
             self.push_message("Did not receive user input.")
+
+#******DAN, ARI, KIM, NEW CAMERA DEF************************************
+    def read_camera(self):
+        # Kill procs
+        if sys.platform == "darwin":
+            print("Killing PTPCamera process")
+            os.system("killall PTPCamera")
+            os.system("killall Type4Camera")
+        # Get Name
+        os.system("gphoto2 --auto-detect > .gphoto.tmp")
+        with open(".gphoto.tmp") as f:
+            lines = f.readlines()
+            if len(lines)>2:
+                line = lines[2]
+                if "usb:" in line:
+                    telescope.camera = line.split("usb:")[0].strip()
+                    # Get ISO Setting
+                    os.system("gphoto2 --get-config=iso > .gphoto.tmp" )
+                    with open(".gphoto.tmp") as f:
+                        lines = f.readlines()
+                        for line in lines:
+                            if "Current:" in line:
+                                telescope.camera_iso = line.split("Current:")[1].strip()
+                    # Get Shutter speed
+                    os.system("gphoto2 --get-config=shutterspeed > .gphoto.tmp" )
+                    with open(".gphoto.tmp") as f:
+                        lines = f.readlines()
+                        for line in lines:
+                            if "Current:" in line:
+                                telescope.camera_shutter = line.split("Current:")[1].strip()
+            else:
+                self.push_message("No camera found.")
+
+    def define_iso(self):
+        iso_value = self.get_param("Set ISO value 100, 200, 400, 800, 1600, 3200, 6400:")
+        if len(iso_value)>0:
+            os.system("gphoto2 --set-config capture=on --set-config iso=" + iso_value )
+        self.read_camera()
+
+    def shutter_speed(self):
+        shutter_value = self.get_param("Enter exposure time in s, e.g. 1, 5, 20, 1/10:")
+        if len(shutter_value)>0:
+            try:
+                svi = int(shutter_value)
+            except:
+                svi = 1
+            if svi<30:
+                os.system("gphoto2 --set-config capture=on --set-config shutterspeed=" + shutter_value )
+            else:
+                os.system("gphoto2 --set-config shutterspeed=bulb")
+                telescope.camera_longexpshutter = int(shutter_value)
+        self.read_camera()
+
+    def numberofpictures(self):
+        num_value = self.get_param("Number of pictures [default 1]")
+        if len(num_value)>0:
+            telescope.camera_num = int(num_value)
+        else:
+            telescope.camera_num = 1
+
+#def rename(name, num):
+#renamecmd = "mv %s %s%i.jpg"%("capt0000.jpg",name,num)
+#os.system(renamecmd)
+
+    def capture_images(self):
+        filename = self.get_param("Filename [default: test]")
+        self.read_camera()
+        if len(filename)<1:
+            filename = "test"
+        folder = 'pictures/'
+        if not os.path.exists(folder):
+            self.push_message("Creating folder '"+folder+"'.")
+            os.system("mkdir "+folder)
+        telescope.camera_path = ''+folder+''+filename
+        telescope.camera_numtaken = 0
+        telescope.camera_status = 1
+
+    def camera_check(self):
+        if telescope.camera_status == 0:
+            return
+        if telescope.camera_numtaken >= telescope.camera_num:
+            if os.path.isfile(".gphoto.tmp"):
+                self.push_message("All pictures taken.")
+                telescope.camera_status = 0
+            return
+             
+        if telescope.camera_status==1 or os.path.isfile(".gphoto.tmp"):
+            os.system("rm -f .gphoto.tmp")
+            if "bulb" not in telescope.camera_shutter:
+                self.push_message("Taking picture %d of %d." %(telescope.camera_numtaken+1,telescope.camera_num))
+                os.system("(gphoto2 --capture-image-and-download --force-overwrite --filename=%s_%04d.jpg >/dev/null; echo 1 > .gphoto.tmp) &"%(telescope.camera_path,telescope.camera_numtaken))
+            else:
+                self.push_message("Taking picture %d of %d (%ds long exp)." %(telescope.camera_numtaken+1,telescope.camera_num,telescope.camera_longexpshutter))
+                # gphoto2 --wait-event=2s --set-config eosremoterelease=Immediate --wait-event=5s --set-config eosremoterelease=Off --wait-event-and-download=5s
+                os.system("(gphoto2 --wait-event=2s --set-config eosremoterelease=Immediate --wait-event=%ds --set-config eosremoterelease=Off --force-overwrite --filename=%s_%04d.jpg --wait-event-and-download=5s >/dev/null; echo 1 > .gphoto.tmp) &"% (telescope.camera_longexpshutter, telescope.camera_path,telescope.camera_numtaken))
+            telescope.camera_status = 2
+            telescope.camera_numtaken += 1
+            
+
+        # Bulb mode not implemented yet:
+        #    cmd = "gphoto2 --set-config shutterspeed=bulb"
+        #    cmd = "gphoto2 --set-config bulb=1 eosremoterelease=Immediate --wait-event=120s --set-config eosremoterelease=Off --wait-event-and-download=2s"
+        #
+
+        # Live previewing not implemented yet:
+        #root = tk.Tk()
+        #root.geometry('400x400')
+        #canvas = tk.Canvas(root,width=400,height=400)
+        #canvas.pack()
+        #pilImage = Image.open(telescope.camera_path+"_"+str(a)+".jpg").resize((400, 400),Image.ANTIALIAS)
+        #image = ImageTk.PhotoImage(pilImage)
+        #imagesprite = canvas.create_image(0,0,image=image,anchor=tk.NW)
+        #root.after(1000, lambda: root.destroy()) # Destroy the widget after 30 seconds
+        #root.mainloop()
+
+
+#******NEW CAMERA DEF************************************
 
     def set_target_declination(self):
         dec = self.get_param("Set target Declination [+dd:mm:ss]")
@@ -414,7 +572,7 @@ class Telescope():
         if os.uname()[0]=="Darwin":
             default_port_name = '/dev/tty.usbserial'
         else:
-            default_port_name = '/dev/ttyS0'
+            default_port_name = '/dev/ttyUSB0'
         port_name = self.get_param("RoboFocus serial port [leave blank for '"+default_port_name+"']")
         try:
             if port_name == '':
@@ -518,4 +676,3 @@ class Telescope():
         
 if __name__ == '__main__':                                                       
     curses.wrapper(Telescope)
-

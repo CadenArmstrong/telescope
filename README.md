@@ -20,6 +20,9 @@ Use the following setting in Stellarium:
 - Eric Dapp
 - Caden Armstrong
 - Hanno Rein
+- Kim Pham
+- Ari Silburt
+- Dan Dobre 
 
 ### License
 UTSC | PCTS is free software: you can redistribute it and/or modify
