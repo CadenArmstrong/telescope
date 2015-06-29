@@ -717,6 +717,7 @@ class Telescope():
         focuslevels = [] # keep track of focus level record
         filename = "pictures/focus_0000.JPG" 
         self.capture_focus_image()
+        self.camera_check()
         current_focus = 0
         step_size = -int(steps/10)
         hitMax = False
@@ -728,6 +729,7 @@ class Telescope():
             self.robofocus_move(step_size)
             current_focus += step_size
             self.capture_focus_image()
+            self.camera_check()
             focuslevels.append(self.focus_level(filename,threshold))
             if focuslevels[-1] < focuslevels[-2]: # Hitting a peak
                 if focusIn:
