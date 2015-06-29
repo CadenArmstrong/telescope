@@ -7,6 +7,18 @@ This python script can communicate with the UTSC Telescope via a RS232 connectio
 ### Simple instructions
 Simply run `utsc-ptcs.py`. Then open the serial port by pressing `o`. 
 
+### Alignment instructions
+1. Connect telescope to Stellarium
+2. Toggle Stellarium mode to "Align to next coordinates"
+3. Using telescope hand controls, move telescope to a known object
+4. Set alignment side (Which side the object is on, West or East)
+5. Send coordinates for object from Stellarium
+6. Toggle Stellarium mode to "Move to coordinates"
+
+To send coordinates from Stellarium to PTCS:
+	1. Select target in Stellarium by clicking on it
+	2. Hit CTRL-1
+
 ### Stellarium settings:
 UTSC | PTCS can communicate with Stellarium via the *Stellarium Protocol*.
 Start the stellarium server by pressing `s`. 
@@ -15,6 +27,7 @@ Use the following setting in Stellarium:
   - Coordinate system: Equinox of the Day (JNow)
   - Host: localhost
   - Port: 10001
+
 
 ### Authors
 - Eric Dapp
