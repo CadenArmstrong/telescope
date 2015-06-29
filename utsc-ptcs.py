@@ -698,7 +698,7 @@ class Telescope():
         return integral
 
     def autofocus(self):
-        self.camera_num = 1
+        telescope.camera_num = 1
         param = self.get_param("Auto focus, focus must be in move IN direction. [max steps in(default 50),threshold(default 50)]")
         param.strip("[")
         param.strip("]")
