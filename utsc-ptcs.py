@@ -698,7 +698,7 @@ class Telescope():
         return integral
 
     def autofocus(self):
-        telescope.camera_num = 1
+        self.camera_num = 1
         param = self.get_param("Auto focus, focus must be in move IN direction. [max steps in(default 50),threshold(default 50)]")
         param.strip("[")
         param.strip("]")
@@ -716,6 +716,7 @@ class Telescope():
         inFocus = False
         focuslevels = [] # keep track of focus level record
         filename = "pictures/focus_0000.JPG" 
+        self.capture_focus_image()
         current_focus = 0
         step_size = -int(steps/10)
         hitMax = False
@@ -726,6 +727,7 @@ class Telescope():
                 return
             self.robofocus_move(step_size)
             current_focus += step_size
+            self.capture_focus_image()
             focuslevels.append(self.focus_level(filename,threshold))
             if focuslevels[-1] < focuslevels[-2]: # Hitting a peak
                 if focusIn:
