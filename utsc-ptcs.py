@@ -29,6 +29,9 @@ import sys
 import subprocess
 import signal
 #import Tkinter as tk
+from PIL import Image
+import numpy as np
+
 
 
 ## Conversion functions
@@ -69,6 +72,7 @@ class Menu():
             #('b','Return to previous target',       telescope.previous_alignment),
             ('g','Go to target',                    telescope.go_to_target), 
             ('m','Move RoboFocus',                  telescope.robofocus_userinput),
+            ('F','Start Auto focus',                  telescope.autofocus),
             #('R','Target right ascension',          telescope.set_target_rightascension), 
             #('d','Target declination',              telescope.set_target_declination), 
             #('C','Execute custom telescope command',telescope.send_custom_command),
@@ -489,6 +493,21 @@ class Telescope():
         telescope.camera_path = ''+folder+''+filename
         telescope.camera_numtaken = 0
         telescope.camera_status = 1
+    # ==========================
+    # Method to automate Focusing 
+    # experimental 
+    # ==========================
+    def capture_focus_image(self):
+        filename = "focus"
+        self.read_camera()
+        folder = 'pictures/'
+        if not os.path.exists(folder):
+            self.push_message("Creating folder '"+folder+"'.")
+            os.system("mkdir "+folder)
+        telescope.camera_path = ''+folder+''+filename
+        telescope.camera_numtaken = 0
+        telescope.camera_status = 1
+    # ==========================
 
     def camera_check(self):
         if telescope.camera_status == 0:
@@ -654,6 +673,76 @@ class Telescope():
             return self.robofocus_move_out(steps)
         if steps<0:
             return self.robofocus_move_in(-steps)
+
+    # ==========================================
+    # AUTO FOCUS FUNCTION 
+    # Experimental
+    # ==========================================
+    def focus_level(filename, threshold=50):
+        try:
+            im = Image.open(filename, 'r') # open image
+        except:
+            print "Failed to open image"
+            return None
+        pixels = im.getdata() # get pixel data
+        data = np.asarray(im) # pixel data as 3d array
+        data = np.concatenate(data) # combine rows and columns
+        derps = data[np.sum(data,axis=1) > 2] # filter out black pixels
+        hist = np.histogram(derps,bins=40) # histogram the results
+        integral = 0
+        binwidth = hist[1][1]-hist[1][0] # integration width
+        for a in range(0,len(hist[0])):
+            if(hist[1][a] > threshold):
+                if(hist[0][a] != 0):
+                    integral += np.log(hist[0][a])*binwidth # compute integral to check number of pixels above threshold with weighting towards brighter pixels
+        return integral
+
+    def autofocus(self):
+        telescope.camera_num = 1
+        param = self.get_param("Auto focus, focus must be in move IN direction. [max steps in(default 50),threshold(default 50)]")
+        param.strip("[")
+        param.strip("]")
+        steps, threshold = steps.split(",")
+        try:
+            steps = int(steps)
+        except:
+            steps = 50 # maximum range to check if in focus, should be checked by eye
+        try:
+            threshold = int(threshold)
+        except:
+            threshold = 50
+        if(steps == 0):
+            return
+        inFocus = False
+        focuslevels = [] # keep track of focus level record
+        filename = "pictures/focus_0000.JPG" 
+        current_focus = 0
+        step_size = -int(steps/10)
+        hitMax = False
+        focusIn = True
+        focuslevels.append(self.focus_level(filename,threshold))
+        while !inFocus:
+            if cont == "n"
+                return
+            self.robofocus_move(step_size)
+            current_focus += step_size
+            focuslevels.append(self.focus_level(filename,threshold))
+            if focuslevels[-1] < focuslevels[-2]: # Hitting a peak
+                if focusIn:
+                    focusIn = False
+                    step_size = 1
+                else:
+                    inFocus = True
+                    self.robofocus_move(-step_size)
+                    return
+            if current_focus > steps:
+                return # temporary fix, should do something else
+            if focusIn:
+                step_size = abs(step_size)*-1
+            else:
+                step_size = abs(step_size)
+# cont = self.get_param("Continue ? y/n") # TEMPORARY
+
         
     #################### Cleanup functions ######################
     def exit(self):
