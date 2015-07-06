@@ -22,14 +22,14 @@ import serial
 import os
 import time
 import curses
-import socket
+import socket 
 import struct
 import time
 import sys
 import subprocess
 import signal
 #import Tkinter as tk
-from PIL import Image
+from PIL import Image, ImageFilter, ImageChops, ImageStat
 import numpy as np
 
 
@@ -72,7 +72,7 @@ class Menu():
             #('b','Return to previous target',       telescope.previous_alignment),
             ('g','Go to target',                    telescope.go_to_target), 
             ('m','Move RoboFocus',                  telescope.robofocus_userinput),
-            ('F','Start Auto focus',                  telescope.autofocus),
+            ('F','Start Auto focus',                  telescope.start_autofocus),
             #('R','Target right ascension',          telescope.set_target_rightascension), 
             #('d','Target declination',              telescope.set_target_declination), 
             #('C','Execute custom telescope command',telescope.send_custom_command),
@@ -222,6 +222,9 @@ class Telescope():
         self.camera_path = None
         self.last_telescope_update = 0
         self.last_robofocus_update = 0
+        self.autofocusmode = "off" # States are "off", "coarse", "fine"
+        self.autofocuslevels= []
+        self.autofocuspoints= []
         self.conn = None
         self.socket = None
         self.serialport = None
@@ -336,6 +339,7 @@ class Telescope():
             self.menu.display()
             self.status.display()
             self.camera_check()
+            self.check_autofocus()
     
     def push_message(self, message):
         self.status.push_message(message)
@@ -678,74 +682,78 @@ class Telescope():
     # AUTO FOCUS FUNCTION 
     # Experimental
     # ==========================================
-    def focus_level(filename, threshold=50):
+    def focus_level(filename, s=5):
         try:
             im = Image.open(filename, 'r') # open image
         except:
             print "Failed to open image"
             return None
-        pixels = im.getdata() # get pixel data
-        data = np.asarray(im) # pixel data as 3d array
-        data = np.concatenate(data) # combine rows and columns
-        derps = data[np.sum(data,axis=1) > 2] # filter out black pixels
-        hist = np.histogram(derps,bins=40) # histogram the results
-        integral = 0
-        binwidth = hist[1][1]-hist[1][0] # integration width
-        for a in range(0,len(hist[0])):
-            if(hist[1][a] > threshold):
-                if(hist[0][a] != 0):
-                    integral += np.log(hist[0][a])*binwidth # compute integral to check number of pixels above threshold with weighting towards brighter pixels
-        return integral
+        imf = im.filter(ImageFIlter.MedianFilter(s))
+        d = ImageCHops.subtract(im,imf,1,100)
+        fl = ImageStat.Stat(d).stddev[0]
+        self.push_message("Focus level: %f"%fl)
+        return fl
 
-    def autofocus(self):
-        telescope.camera_num = 1
-        param = self.get_param("Auto focus, focus must be in move IN direction. [max steps in(default 50),threshold(default 50)]")
-        param.strip("[")
-        param.strip("]")
-        steps, threshold = steps.split(",")
+    def start_autofocus(self):
+        params = self.get_param("Auto focus: maxrange(default 500),numsteps(default 10)") # should be like 30,30
+        if len(params) < 1:
+            params = "500,10"
         try:
-            steps = int(steps)
+            maxrange, numsteps = params.split(",")
+            maxrange = int(maxrange)
+            numsteps = int(numsteps)
         except:
-            steps = 50 # maximum range to check if in focus, should be checked by eye
-        try:
-            threshold = int(threshold)
-        except:
-            threshold = 50
-        if(steps == 0):
+            self.push_message("Error reading auto focus settings")
             return
-        inFocus = False
-        focuslevels = [] # keep track of focus level record
-        filename = "pictures/focus_0000.JPG" 
+        self.autofocusmode = "coarse"
         self.capture_focus_image()
-        self.camera_check()
-        current_focus = 0
-        step_size = -int(steps/10)
-        hitMax = False
-        focusIn = True
-        focuslevels.append(self.focus_level(filename,threshold))
-        while !inFocus:
-            if cont == "n"
+        self.autofocuslevels = []
+        self.autofocuspoints = [] 
+        stepsize = int(maxrange/numsteps)
+        for a in range(0,numsteps):
+            self.autofocuspoints.append(a*stepsize)
+        return
+
+    def check_autofocus(self):
+        if self.autofocusmode == "off":
+            return
+        self.autofocuslevels.append(self.focus_level("focus_0000.jpg"))
+        if len(self.autofocuslevels) == len(self.autofocuspoints): # Done auto focus for this level
+            if self.autofocusmode == "coarse":
+                self.autofocusmode = "fine"
+                minindex = self.autofocuslevels.index(max(self.autofocuslevels))-1
+                if minindex > len(self.autofocuslevels)-2:
+                    minindex = len(self.autofocuslevels)-3
+                if minindex < 0:
+                    minindex = 0
+                numpoints = len(self.autofocuspoints)
+                maxrange = self.autofocuslevels[minindex+2]-self.autofocuslevels[minindex]
+                self.autofocuspoints = [] 
+                stepsize = int(maxrange/numsteps)
+                for a in range(0,numsteps):
+                    self.autofocuspoints.append(a*stepsize)
+                self.autofocuslevels = []
+                self.robofocus_move_out(self.autofocuslevels[-1]-self.autofocuslevels[minindex])
+                self.push_message("Finished coarse focus")
+                self.capture_focus_image()
                 return
-            self.robofocus_move(step_size)
-            current_focus += step_size
-            self.capture_focus_image()
-            self.camera_check()
-            focuslevels.append(self.focus_level(filename,threshold))
-            if focuslevels[-1] < focuslevels[-2]: # Hitting a peak
-                if focusIn:
-                    focusIn = False
-                    step_size = 1
-                else:
-                    inFocus = True
-                    self.robofocus_move(-step_size)
-                    return
-            if current_focus > steps:
-                return # temporary fix, should do something else
-            if focusIn:
-                step_size = abs(step_size)*-1
-            else:
-                step_size = abs(step_size)
-# cont = self.get_param("Continue ? y/n") # TEMPORARY
+                
+            elif self.autofocusmode == "fine":
+                minindex = self.autofocuslevels.index(max(self.autofocuslevels))
+                self.robofocus_move_out(self.autofocuslevels[-1]-self.autofocuslevels[minindex])
+                self.autofocuslevels = []
+                self.autofocuspoints = [] 
+                self.autofocusmode = "off"
+                self.push_message("Finished auto focus")
+                return
+        else:
+                self.capture_focus_image()
+                move_amount = len(self.autofocuslevels)
+                move_amount = self.autofocuspoints[move_amount]-self.autofocuspoints[move_amount-1]
+                self.robofocus_move_in(move_amount)
+                self.push_message("Auto focus point %i/%i %s"%(len(self.autofocuslevels),len(self.autofocuspoints),self.autofocusmode))
+                return
+
 
         
     #################### Cleanup functions ######################
